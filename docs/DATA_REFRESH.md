@@ -111,6 +111,50 @@ so `run` also freezes every vpic table with ≤ 512 rows into `vpic/lookups.json
 the rename becomes a one-line PR diff, and the report names each changed value
 against the committed freeze.
 
+## A built wheel must match the oracle
+
+The gates above test the dev build. `scripts/parity/release_gate.py` tests the
+artifact a release would publish: it installs a built wheel into a throwaway
+environment and compares it with the oracle on VINs the wheel generates from its
+own data.
+
+```bash
+make build-wheel
+make oracle-up
+make oracle-load DUMP=downloads/vPICList_lite_2026_11.plain.zip
+make release-gate
+```
+
+`make release-gate` tests the one wheel in `target/wheels/`. When that
+directory holds more than one wheel, name the wheel to test with
+`WHEEL=path.whl`.
+
+Load the oracle with `ULTRAVIN_ORACLE_FAST_PROCS` unset, so that the gate
+compares with NHTSA's unmodified `spvindecode`. The gate fails when the oracle
+holds the rewritten procedures. The VINs are every `cover_vins()` VIN, 1,000
+from `seeded()` and 1,000 from `generate()`. Change the counts with
+`ARGS="--cover N --seeded N --generate N"`. The gate compares the vehicle
+elements in its `GATED` table with `normalize.diff_rows`: make, model, series,
+trim, body class, drive type, both fuel types, electrification level, the GVWR
+band and model year. The gate does not compare the error and correction
+elements.
+
+Each difference prints its VIN, element, field and both answers, and the gate
+exits 1. A VIN that the oracle crashes on is skipped only when
+`scripts/known_problems.json` registers it as an `oracle-crash`. Any other crash
+fails the gate. The gate also fails when it compares no VIN, and when the
+decodes come from this repository instead of the installed wheel. Exit 0 means
+that the gate compared at least one VIN and found no difference.
+
+## A failed statement stops the oracle load
+
+`make oracle-load`, `make oracle-pool-load` and `make refresh` stop when any
+statement of the dump fails. They run `psql` with `ON_ERROR_STOP`. First, they
+remove the lines that a newer `pg_dump` writes and Postgres 16 does not accept:
+`\restrict`, `\unrestrict` and `SET transaction_timeout`. `make oracle-up` and
+`make oracle-pool-up` return when each oracle answers a query over TCP, so a
+load can start immediately after them.
+
 ## Failure playbook
 
 - **build-data sha256 mismatch on an old PR/branch** — NHTSA re-touched the
