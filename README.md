@@ -60,7 +60,8 @@ It runs three workflows:
    organization doesn't allow GitHub Actions to create pull requests, the run
    fails once with a link to the branch, and a person opens the pull request.
 5. The next run on `master` builds the month that the manifest now pins, runs
-   the same comparison, and publishes the release. A run publishes only from
+   the same comparison, and publishes the release. While the pinned month has
+   no release, it goes before any newer month NHTSA has posted. A run publishes only from
    `master`, only after the comparison passes, and only when no release of that
    month exists.
 

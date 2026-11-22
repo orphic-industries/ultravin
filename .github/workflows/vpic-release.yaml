@@ -41,7 +41,10 @@ on:
       - .github/stamp-version.sh
       - scripts/parity/**
       - scripts/oracle.sh
+      - scripts/refresh.py
+      - scripts/wheel_smoke.py
       - docker-compose.yml
+      - Makefile
       - vpic/**
 
 env:
@@ -78,6 +81,7 @@ jobs:
       new: ${{ steps.pick.outputs.new }}
       tag: ${{ steps.pick.outputs.tag }}
       version: ${{ steps.pick.outputs.version }}
+      released: ${{ steps.pick.outputs.released }}
       build: ${{ steps.pick.outputs.build }}
       publish: ${{ steps.pick.outputs.publish }}
     steps:
@@ -108,27 +112,57 @@ jobs:
         run: |
           set -euo pipefail
           pinned=$(jq -r .month vpic/manifest.json)
+          tag_of() { echo "v${UPSTREAM_VERSION}-vpic$1"; }
+          # true or false; any error but "release not found" stops the run, so an
+          # API outage never reads as "not released".
+          released_of() {
+            local out
+            if out=$(gh release view "$(tag_of "$1")" --repo "$GITHUB_REPOSITORY" --json tagName 2>&1); then
+              echo true
+            elif [ "$out" = "release not found" ]; then
+              echo false
+            else
+              echo "::error::gh release view $(tag_of "$1"): $out" >&2
+              return 1
+            fi
+          }
+          if [ "$REASON" = forced ] && [[ "$FOUND" < "$pinned" ]]; then
+            echo "::error::month $FOUND is older than the pinned $pinned; a data pull request would move the data back"
+            exit 1
+          fi
+          pinned_released=$(released_of "$pinned")
+
           # A month other than the pin, or the pin re-issued with other bytes, is
           # new data: it goes to a pull request and is never published from here.
-          if [ -z "$FOUND" ] || { [ "$FOUND" = "$pinned" ] && [ "$REASON" != "reissue" ]; }; then
+          # Outside a pull request, a pinned month with no release goes first: it
+          # is built and published, and a newer month NHTSA already posted waits
+          # for a later run. Otherwise a newer month would hide the pin for good.
+          waiting=""
+          if [ -z "$FOUND" ] || { [ "$FOUND" = "$pinned" ] && [ "$REASON" != reissue ]; }; then
             month=$pinned new=false
+          elif [ "$REASON" = new ] && [ "$pinned_released" = false ]; then
+            month=$pinned new=false waiting=$FOUND
           else
             month=$FOUND new=true
           fi
-          tag="v${UPSTREAM_VERSION}-vpic${month}"
+          tag=$(tag_of "$month")
           version="${UPSTREAM_VERSION}+vpic.${month/_/.}"
-          released=false
-          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            released=true
-          fi
-          # A new month already handed over: its branch was pushed, whether or not
-          # the pull request opened (the pull-request job can push but may not be
-          # allowed to open one, and then a person opens it from the branch).
+          if [ "$month" = "$pinned" ]; then released=$pinned_released; else released=$(released_of "$month"); fi
+
+          # A new month already handed over: an open pull request, or a branch with
+          # commits master lacks. The pull-request job can push but may not be
+          # allowed to open a pull request, and then a person opens it from the
+          # branch. A branch already merged into master (a reissue's earlier
+          # import) doesn't count.
           handed_over=false
           if [ "$new" = true ]; then
-            open_pr=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "data/vpic-$month" --state open --json number --jq length)
-            branch=$(gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/heads/data/vpic-$month" --jq length)
-            if [ "$open_pr" != 0 ] || [ "$branch" != 0 ]; then handed_over=true; fi
+            branch="data/vpic-$month"
+            open_pr=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$branch" --state open --json number --jq length)
+            ahead=0
+            if [ "$(gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/heads/$branch" --jq length)" != 0 ]; then
+              ahead=$(gh api "repos/$GITHUB_REPOSITORY/compare/master...$branch" --jq .ahead_by)
+            fi
+            if [ "$open_pr" != 0 ] || [ "$ahead" != 0 ]; then handed_over=true; fi
           fi
 
           build=true
@@ -148,6 +182,7 @@ jobs:
             echo "new=$new"
             echo "tag=$tag"
             echo "version=$version"
+            echo "released=$released"
             echo "build=$build"
             echo "publish=$publish"
           } | tee -a "$GITHUB_OUTPUT"
@@ -158,6 +193,7 @@ jobs:
             echo "|---|---|"
             echo "| pinned month | \`$pinned\` |"
             echo "| new data | $new |"
+            echo "| newer month waiting for the pin's release | ${waiting:-none} |"
             echo "| tag | \`$tag\` (released: $released) |"
             echo "| data branch or pull request exists | $handed_over |"
             echo "| builds | $build |"
@@ -206,7 +242,9 @@ jobs:
         if: env.NEW == 'true'
         env:
           DUMP: ${{ steps.dump.outputs.path }}
-        run: make data DUMP="$DUMP" MONTH="$MONTH"
+        # `make data` with --locked, so a stale Cargo.lock fails here instead of
+        # being rewritten.
+        run: cargo run -p ultravin-build --release --locked -- --dump "$DUMP" --month "$MONTH" --out vpic
       - uses: ./.github/actions/build-data
         with:
           dump: ${{ steps.dump.outputs.path }}
@@ -285,9 +323,19 @@ jobs:
         with:
           name: vpic-data
           path: crates/ultravin/data
+      # maturin-action installs the latest maturin unless told otherwise; build
+      # with the one uv.lock pins.
+      - name: Read maturin's locked version
+        id: maturin
+        run: |
+          set -euo pipefail
+          v=$(grep -A1 '^name = "maturin"$' uv.lock | sed -n 's/^version = "\(.*\)"$/\1/p')
+          test -n "$v"
+          echo "version=v$v" | tee -a "$GITHUB_OUTPUT"
       - name: Build wheel
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
+          maturin-version: ${{ steps.maturin.outputs.version }}
           target: ${{ matrix.target }}
           args: --release --locked --out dist
           sccache: false
@@ -416,6 +464,7 @@ jobs:
     env:
       MONTH: ${{ needs.detect.outputs.month }}
       TAG: ${{ needs.detect.outputs.tag }}
+      RELEASED: ${{ needs.detect.outputs.released }}
       BRANCH: data/vpic-${{ needs.detect.outputs.month }}
       GH_TOKEN: ${{ github.token }}
     steps:
@@ -438,6 +487,15 @@ jobs:
           git checkout -b "$BRANCH"
           git add -A vpic crates/ultravin/data/manifest.json
           git commit -m "data: NHTSA vPIC $MONTH"
+          # A branch with commits master lacks holds someone's work, such as the
+          # `make refresh` output its pull request asks for: never overwrite it.
+          # A branch already merged into master (a reissue's earlier import) is
+          # replaced.
+          if [ "$(gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/heads/$BRANCH" --jq length)" != 0 ] \
+              && [ "$(gh api "repos/$GITHUB_REPOSITORY/compare/master...$BRANCH" --jq .ahead_by)" != 0 ]; then
+            echo "::error::$BRANCH has commits master lacks, so this run leaves it as it is. To import $MONTH again, delete the branch and rerun."
+            exit 1
+          fi
           git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/$BRANCH"
           {
             echo "NHTSA vPIC \`$MONTH\`, imported by the vPIC Release workflow."
@@ -456,7 +514,13 @@ jobs:
             echo "re-freezes \`tests/parity_corpus.json\` and runs the refresh gates"
             echo "(docs/DATA_REFRESH.md); push its changes here if CI is red."
             echo
-            echo "Once a person merges this, the next run on master publishes \`$TAG\`."
+            if [ "$RELEASED" = true ]; then
+              echo "\`$TAG\` is already released with the earlier bytes of this month, so"
+              echo "merging this publishes nothing. To release these bytes, a person deletes"
+              echo "that release and its tag after the merge, and dispatches this workflow."
+            else
+              echo "Once a person merges this, the next run on master publishes \`$TAG\`."
+            fi
           } > "$RUNNER_TEMP/body.md"
           if ! gh pr create --repo "$GITHUB_REPOSITORY" --base master --head "$BRANCH" \
               --title "data: NHTSA vPIC $MONTH" --body-file "$RUNNER_TEMP/body.md"; then
@@ -503,6 +567,13 @@ jobs:
           set -euo pipefail
           test "$(jq -r .month vpic/manifest.json)" = "$MONTH"
           test "$(find dist -name '*.whl' | wc -l)" = 3
+          # `gh release create` attaches to an existing tag and ignores --target, so
+          # a tag pushed by hand must already name the commit these wheels came from.
+          if tagged=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq .object.sha 2>/dev/null) \
+              && [ "$tagged" != "$GITHUB_SHA" ]; then
+            echo "::error::tag $TAG exists at $tagged, not at $GITHUB_SHA, the commit these wheels were built from"
+            exit 1
+          fi
           (cd dist && sha256sum ./*.whl | sed 's| \./| |') > SHA256SUMS
           cat SHA256SUMS
           {
