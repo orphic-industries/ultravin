@@ -4,7 +4,8 @@
 # poisoned artifact ships. Installed with --require-hashes --only-binary=:all:,
 # so pip refuses anything whose sha256 isn't listed below.
 #
-# Hashes are PyPI's own, verbatim (pip download + pip hash / the PyPI JSON API).
+# Hashes are the package index's own, verbatim (pip download + pip hash / the
+# index's JSON API).
 # Every caller runs ubuntu-latest x86_64, so only the manylinux x86_64 wheels
 # are listed; multiple --hash lines are OR'd, covering the CPython versions the
 # runner image may ship. 3.12+ only on purpose: below that blake3 pulls in

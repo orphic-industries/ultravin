@@ -31,16 +31,61 @@ NHTSA SQL Server baseline** on 8 cores.
 The complete vehicle database ships inside the binary. No network, no database
 server, no runtime data files. Install it and decode.
 
+## This fork
+
+This repository is a fork of ultravin that publishes one thing: a GitHub
+release of wheels for each NHTSA vPIC month. It publishes nothing to PyPI or
+crates.io, and nothing in it merges a pull request.
+
+It runs three workflows:
+
+- `ci.yaml` checks code on every pull request and on `master`.
+- `security.yaml` runs the security scanners.
+- `vpic-release.yaml` builds a month's wheels, compares them with NHTSA's
+  procedure, and publishes the release.
+
+### How a month becomes a release
+
+1. Every day at 20:23 UTC, `vpic-release.yaml` runs `scripts/refresh.py detect`
+   to find a month newer than the one `vpic/manifest.json` pins.
+2. For a new month, the workflow downloads the dump, records its SHA-256, runs
+   the importer (`make data`), and builds three wheels: linux x86_64
+   (`manylinux_2_17`), linux aarch64 (`manylinux_2_28`) and macOS arm64.
+3. The workflow loads the dump into the Postgres oracle and runs
+   `scripts/parity/release_gate.py` on the linux x86_64 wheel. The gate decodes
+   VINs the wheel generates from its own data, with the wheel and with NHTSA's
+   unmodified `spvindecode`, and fails on any difference.
+4. If the comparison passes, the workflow pushes `data/vpic-<YYYY_MM>` and opens
+   a pull request into `master`. A person reviews and merges it. If the
+   organization doesn't allow GitHub Actions to create pull requests, the run
+   fails once with a link to the branch, and a person opens the pull request.
+5. The next run on `master` builds the month that the manifest now pins, runs
+   the same comparison, and publishes the release. While the pinned month has
+   no release, it goes before any newer month NHTSA has posted. A run publishes only from
+   `master`, only after the comparison passes, and only when no release of that
+   month exists.
+
+The release tag and the wheel version both carry the month: tag
+`v3.0.2-vpic2026_11` holds wheels of version `3.0.2+vpic.2026.11`. The release
+lists each wheel's SHA-256 in its notes and in `SHA256SUMS`.
+`ultravin.provenance()` reports the month inside the wheel.
+
+To run it by hand, dispatch `vpic-release.yaml` from the **Actions** tab, with
+a `month` to build that month instead of probing NHTSA. A pull request that
+changes the workflow, `vpic/` or the comparison runs every step except the
+data pull request and the release.
+
 ## Getting Started
 
 ### Installation
 
 ```bash
-uv add ultravin
+uv add ultravin          # the library
+uv add 'ultravin[cli]'   # the library and the `ultravin` command
 ```
 
 Prebuilt wheels require **Python 3.10+** and nothing else — the data ships inside
-the wheel.
+the wheel. A bare install brings no dependency. The `cli` extra adds `typer`.
 
 ### Usage
 
@@ -110,7 +155,7 @@ default's ~41.
 (`element_id`, `group_name`, `data_type`, …). Pin to `element_id` if you need a
 key that survives NHTSA renaming a variable between data releases.
 
-From the command line:
+From the command line, with the `cli` extra installed:
 
 ```bash
 ultravin decode 1HGCM82633A004352             # JSON object
@@ -406,8 +451,8 @@ time; neither was re-measured here.
 - [Acceptance](docs/ACCEPTANCE.md) — the parity policy: what counts as passing, how a divergence is adjudicated
 - [Known deviations](docs/KNOWN_DEVIATIONS.md) — the vPIC defects ultravin does not reproduce, with evidence
 - [Corpora](docs/CORPUS.md) — `generate`, `cover_vins`, `sweep`: hitting every decode behaviour with the fewest VINs
-- [Data refresh](docs/DATA_REFRESH.md) — how the monthly NHTSA dump is integrated behind parity gates
-- [Release](docs/RELEASE.md) — tags, wheels, the embedded artifact, crates.io
+- [Data refresh](docs/DATA_REFRESH.md) — how to integrate a monthly NHTSA dump behind parity gates
+- [Builds and releases](docs/RELEASE.md) — tags, wheels, the embedded artifact, and the monthly GitHub release
 
 ## License
 

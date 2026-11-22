@@ -50,10 +50,38 @@ fast_procs() {
       -e 's/^\([[:space:]]*\)drop table \([A-Za-z0-9_]*\);/\1delete from \2;/'
 }
 
+# vPIC's dump comes from a newer pg_dump than the oracle's Postgres 16. Its
+# `\restrict`/`\unrestrict` meta-commands and its `SET transaction_timeout` are
+# unknown to psql 16 and the server, so they are dropped before the load. Every
+# other statement must succeed: the load runs with ON_ERROR_STOP, so a statement
+# that fails stops it and the command exits nonzero instead of loading a partial
+# database.
+dump_sql() {
+  case "$1" in
+    *.zip) unzip -p "$1" ;;
+    *)     cat "$1" ;;
+  esac | sed -e '/^\\restrict /d' -e '/^\\unrestrict /d' -e '/^SET transaction_timeout /d'
+}
+PSQL_LOAD=(psql -q -v ON_ERROR_STOP=1 -U postgres -d vpic)
+
+# `docker compose up --wait` returns once the healthcheck's pg_isready passes, and
+# it already passes while the image's first-start init runs on a socket-only
+# server that has not created `vpic` yet. A load straight after `up` can then fail
+# on a missing database. The init server never listens on TCP, so a query over
+# TCP succeeds only on the real server. Waits up to 60 s for service $1.
+wait_ready() {
+  for _ in $(seq 60); do
+    docker compose exec -T "$1" psql -h 127.0.0.1 -U postgres -d vpic -tAc 'select 1' >/dev/null 2>&1 && return 0
+    sleep 1
+  done
+  docker compose exec -T "$1" psql -h 127.0.0.1 -U postgres -d vpic -tAc 'select 1' >/dev/null
+}
+
 cmd="${1:-}"; shift || true
 case "$cmd" in
   up)
     docker compose up -d --wait "$SVC"
+    wait_ready "$SVC"
     # Ask compose for the binding rather than hardcoding it: $SVC selects any pool
     # member and they are on 55432-55436 (see docker-compose.yml).
     echo "$SVC ready on $(docker compose port "$SVC" 5432) (db=vpic, user=postgres)"
@@ -61,10 +89,7 @@ case "$cmd" in
   load)
     dump="${1:?$(usage)}"
     echo "loading $dump into the oracle (this takes a few minutes for ~11M rows)..."
-    case "$dump" in
-      *.zip) unzip -p "$dump" ;;
-      *)     cat "$dump" ;;
-    esac | fast_procs | docker compose exec -T "$SVC" psql -q -U postgres -d vpic
+    dump_sql "$dump" | fast_procs | docker compose exec -T "$SVC" "${PSQL_LOAD[@]}"
     echo "loaded:"
     docker compose exec -T "$SVC" psql -tA -U postgres -d vpic \
       -c "select count(*) || ' patterns, ' || (select count(*) from vpic.wmi) || ' WMIs' from vpic.pattern;"
@@ -88,22 +113,31 @@ case "$cmd" in
     ;;
   pool-up)
     docker compose up -d --wait $POOL
+    for svc in $POOL; do
+      wait_ready "$svc"
+    done
     echo "oracle pool ready on localhost:55432-55436 (db=vpic, user=postgres)"
     ;;
   pool-load)
     dump="${1:?$(usage)}"
     tmp="$(mktemp -t vpic-dump-XXXXXX.sql)"
     echo "extracting $dump -> $tmp ..."
-    case "$dump" in
-      *.zip) unzip -p "$dump" ;;
-      *)     cat "$dump" ;;
-    esac | fast_procs > "$tmp"
+    dump_sql "$dump" | fast_procs > "$tmp"
     echo "loading all 5 oracles in parallel ..."
+    pids=()
     for svc in $POOL; do
-      ( docker compose exec -T "$svc" psql -q -U postgres -d vpic < "$tmp" >/dev/null 2>&1 && echo "  loaded $svc" ) &
+      ( docker compose exec -T "$svc" "${PSQL_LOAD[@]}" < "$tmp" >/dev/null && echo "  loaded $svc" ) &
+      pids+=("$!")
     done
-    wait
+    failed=0
+    for pid in "${pids[@]}"; do
+      wait "$pid" || failed=1
+    done
     rm -f "$tmp"
+    if [ "$failed" != 0 ]; then
+      echo "pool-load: at least one oracle failed to load (see the psql errors above)" >&2
+      exit 1
+    fi
     for svc in $POOL; do
       n="$(docker compose exec -T "$svc" psql -tA -U postgres -d vpic -c 'select count(*) from vpic.pattern;' 2>/dev/null | tr -d '[:space:]')"
       echo "  $svc: $n patterns"

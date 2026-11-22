@@ -784,7 +784,9 @@ wheels = [
 [[package]]
 name = "ultravin"
 source = { editable = "." }
-dependencies = [
+
+[package.optional-dependencies]
+cli = [
     { name = "typer" },
 ]
 
@@ -801,10 +803,12 @@ dev = [
     { name = "pytest-xdist" },
     { name = "ruff" },
     { name = "ty" },
+    { name = "ultravin", extra = ["cli"] },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "typer" }]
+requires-dist = [{ name = "typer", marker = "extra == 'cli'" }]
+provides-extras = ["cli"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -817,4 +821,5 @@ dev = [
     { name = "pytest-xdist", specifier = ">=3.8.0" },
     { name = "ruff" },
     { name = "ty" },
+    { name = "ultravin", extras = ["cli"] },
 ]

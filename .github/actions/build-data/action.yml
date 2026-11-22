@@ -6,6 +6,16 @@ description: >
   unchanged pin *and* unchanged importer skips the download and import entirely.
   Requires a Rust toolchain, jq, and python3 (preinstalled on GH runners).
 
+inputs:
+  dump:
+    description: >
+      Path to a dump zip the caller already downloaded. The action checks it
+      against dump_sha256 in vpic/manifest.json even on a cache hit, and builds
+      from it instead of downloading the dump again. Empty: download the
+      pinned dump.
+    required: false
+    default: ""
+
 runs:
   using: composite
   steps:
@@ -39,9 +49,8 @@ runs:
         # source hash) the build steps that would notice even a cross-year edit
         # never run. Assert it against the pinned dump's own filename here: first
         # step, no cache-hit guard, so a PR cannot desync month from the dump it
-        # names. That desync is not cosmetic — CI requires the answer-key pin's
-        # month to match this month and fetches the pinned asset from
-        # data-<month>, so this month must name the dump actually built.
+        # names. That desync is not cosmetic — cover_year comes from this
+        # month, so it must name the dump actually built.
         case "$url" in
           *"/vPICList_lite_${month}.plain.zip") ;;
           *)
@@ -75,23 +84,32 @@ runs:
         path: crates/ultravin/data/vpic.rkyv
         key: vpic-artifact-${{ steps.meta.outputs.artifact_blake3 }}-${{ steps.meta.outputs.src_hash }}
     - name: Download pinned vPIC dump
-      if: steps.cache.outputs.cache-hit != 'true'
+      if: steps.cache.outputs.cache-hit != 'true' && inputs.dump == ''
       shell: bash
       env:
         DUMP_URL: ${{ steps.meta.outputs.url }}
       run: curl -fSL --retry 3 "$DUMP_URL" -o "$RUNNER_TEMP/dump.zip"
+    # A caller's own download is checked even on a cache hit: the caller is about
+    # to use those bytes (the release workflow loads them into the oracle), so
+    # they must be the pinned dump whether or not the artifact is rebuilt.
     - name: Verify dump sha256
-      if: steps.cache.outputs.cache-hit != 'true'
+      id: dump
+      if: steps.cache.outputs.cache-hit != 'true' || inputs.dump != ''
       shell: bash
       env:
         DUMP_SHA256: ${{ steps.meta.outputs.dump_sha256 }}
-      run: echo "$DUMP_SHA256  $RUNNER_TEMP/dump.zip" | sha256sum -c -
+        DUMP_INPUT: ${{ inputs.dump }}
+      run: |
+        dump="${DUMP_INPUT:-$RUNNER_TEMP/dump.zip}"
+        echo "$DUMP_SHA256  $dump" | sha256sum -c -
+        echo "path=$dump" >> "$GITHUB_OUTPUT"
     - name: Build artifact (deterministic; emits crates/ultravin/data/vpic.rkyv)
       if: steps.cache.outputs.cache-hit != 'true'
       shell: bash
       env:
         MONTH: ${{ steps.meta.outputs.month }}
-      run: cargo run -p ultravin-build --release --locked -- --dump "$RUNNER_TEMP/dump.zip" --month "$MONTH" --out "$RUNNER_TEMP/vpic-verify"
+        DUMP: ${{ steps.dump.outputs.path }}
+      run: cargo run -p ultravin-build --release --locked -- --dump "$DUMP" --month "$MONTH" --out "$RUNNER_TEMP/vpic-verify"
     - name: Verify emitted artifact blake3 matches manifest
       if: steps.cache.outputs.cache-hit != 'true'
       shell: bash
@@ -125,8 +143,8 @@ runs:
         ACTION_PATH: ${{ github.action_path }}
       run: |
         # blake3 isn't in the Python stdlib, and uv is NOT guaranteed on every
-        # caller's runner (release.yaml's build-data job sets up only Rust + jq;
-        # uv is not preinstalled on ubuntu-latest), so pull the prebuilt blake3
+        # caller's runner (ci.yaml's data job sets up only Rust; uv is not
+        # preinstalled on ubuntu-latest), so pull the prebuilt blake3
         # wheel into a throwaway venv via the preinstalled python3 — a genuinely
         # independent implementation, no compile, and no dependency on the caller.
         # Pinned by sha256 (blake3-requirements.txt): this hash decides whether a

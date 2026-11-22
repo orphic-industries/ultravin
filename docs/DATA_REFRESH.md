@@ -1,32 +1,18 @@
-# Automated Monthly Data Refresh
+# Monthly data refresh
 
 NHTSA publishes a new standalone vPIC database roughly monthly
 (`vPICList_lite_YYYY_MM.plain.zip`, observed day 9–18, kept online ~8 months,
-occasionally re-touched after publication). `.github/workflows/data-refresh.yaml`
-integrates each release with no human in the loop until PR review:
-
-```
-daily cron ──▶ detect ──▶ refresh (mechanical + gates) ──▶ PR: data/YYYY_MM
-                              │ failure                         │
-                              ▼                                 ▼
-                          Grok agent fixes on the runner   answer key frozen from the
-                          ──▶ same PR                      branch ──▶ pin committed into
-                                                           the PR ──▶ merge per policy
-```
-
-A month and its answer key land **atomically**: `ci.yaml`'s answerkey job is a
-hard gate (no skip path), so the PR stays red until `answer-key.yaml` — 
-dispatched on the data branch — has frozen the key from the branch's own data
-and committed `tests/answerkey.json` into the PR. Its publish job then re-kicks
-the checks and completes the merge/tag/release per policy
-(`.github/actions/merge-data-pr`). A month whose key build surfaces
-undocumented divergences cannot merge until they are adjudicated — that is the
-gate working.
+occasionally re-touched after publication). `.github/workflows/vpic-release.yaml`
+detects a new month every day, runs the importer, compares the month's wheel
+with NHTSA's procedure, and opens a `data/vpic-<YYYY_MM>` pull request that
+carries only the importer's output. A person runs `scripts/refresh.py` on that
+branch to re-freeze the corpus and run the gates below, pushes what it writes,
+and merges the pull request. Nothing merges a month on its own.
 
 ## The mechanical path
 
-`scripts/refresh.py` is the whole pipeline and runs identically locally and in
-CI (stdlib-only; everything heavy is a subprocess of the existing tools):
+`scripts/refresh.py` is the whole pipeline. It is stdlib-only, and everything
+heavy is a subprocess of the existing tools:
 
 ```bash
 make refresh-detect            # is there a newer dump than vpic/manifest.json?
@@ -86,10 +72,11 @@ the constructed candidate families. The coverage gate is what notices when the
 new data outgrows them.
 
 Exit 0 = integrated and green; exit 2 = gates failed (report still written to
-`target/refresh/report.{md,json}`); exit 1 = mechanical breakage. The PR body
-is the report: data-only vs schema-change classification (`git status` on
-`vpic/schema` + `vpic/procs` — the importer strips volatile dump noise, so a
-data-only month diffs clean there), manifest row/table/function deltas, lookup
+`target/refresh/report.{md,json}`); exit 1 = mechanical breakage. Paste
+`target/refresh/report.md` into the pull request body. It carries the
+data-only vs schema-change classification (`git status` on `vpic/schema` +
+`vpic/procs` — the importer strips volatile dump noise, so a data-only month
+diffs clean there), manifest row/table/function deltas, lookup
 value changes, gate results, and follow-ups (e.g. a new oracle-crash VIN freeze
 had to skip).
 
@@ -126,91 +113,60 @@ so `run` also freezes every vpic table with ≤ 512 rows into `vpic/lookups.json
 the rename becomes a one-line PR diff, and the report names each changed value
 against the committed freeze.
 
-## The agent path
+## A built wheel must match the oracle
 
-If `refresh` fails — schema drift, a proc change, bad data, a new oracle
-defect — the `fix` job runs xAI's Grok Build CLI (the
-`.github/actions/grok-agent` composite action) on the same runner with the full
-toolchain (rust, uv, docker) and a strict contract: never hand-edit generated
-files, parity is the spec, a genuine upstream defect gets a
-`scripts/known_problems.json` entry plus its evidence section in
-`docs/KNOWN_DEVIATIONS.md`, done only when
-`refresh.py run` exits 0 and `make check` is green. It pushes to the same
-`data/YYYY_MM` branch and opens/updates the PR (label `agent-fixed`, or a draft
-with `needs-human` + diagnosis if it can't get there honestly).
+The gates above test the dev build. `scripts/parity/release_gate.py` tests the
+artifact a release would publish: it installs a built wheel into a throwaway
+environment and compares it with the oracle on VINs the wheel generates from its
+own data.
 
-## The review gate
+```bash
+make build-wheel
+make oracle-up
+make oracle-load DUMP=downloads/vPICList_lite_2026_11.plain.zip
+make release-gate
+```
 
-`data-review.yaml` publishes a `review-verdict` check run on the PR head —
-a **required status check** on master, so nothing merges without it. It gates
-PRs from the three branch prefixes the automation uses, `data/*`, `deps/*` and
-the nightly parity lane's `fix/*`; every other PR passes in seconds for $0. Data PRs whose diff is pure
-regeneration (`vpic/**` + the corpus) pass a deterministic allowlist, also
-$0; any data PR carrying code or doc changes — i.e. agent-fixed months — must
-be approved by an adversarial Grok reviewer (read-only, verdict-only) that
-checks diff scope, that every decoder edit is justified by an upstream `vpic/`
-hunk, gate integrity (a new `scripts/known_problems.json` entry must name the
-defective upstream artifact, not merely an output diff), and injection
-artifacts. `deps/*` PRs — the
-nightly lockfile bump, which merges itself — get a second adversarial
-reviewer with no allowlist shortcut, judging scope, gate integrity,
-supply-chain sanity of the lock diff (sources stay on crates.io/PyPI, new
-packages are plausible transitive deps, moves match the bump report), and
-injection artifacts; see `docs/NIGHTLY.md`. Whenever a model reviews, the
-check run is opened `in_progress` before the review starts, so watchers see a
-pending required check for the whole review rather than a window where it
-does not exist yet. Human-created PRs trigger it via
-`pull_request_target` (the gate always runs master's copy of itself and never
-executes PR code); pipeline-created PRs emit no events, so the refresh/fix
-jobs dispatch it explicitly. Uncertainty fails closed with findings posted as
-a PR comment.
+`make release-gate` tests the one wheel in `target/wheels/`. When that
+directory holds more than one wheel, name the wheel to test with
+`WHEEL=path.whl`.
 
-## Setup
+Load the oracle with `ULTRAVIN_ORACLE_FAST_PROCS` unset, so that the gate
+compares with NHTSA's unmodified `spvindecode`. The gate fails when the oracle
+holds the rewritten procedures. The VINs are every `cover_vins()` VIN, 1,000
+from `seeded()` and 1,000 from `generate()`. Change the counts with
+`ARGS="--cover N --seeded N --generate N"`. The gate compares the vehicle
+elements in its `GATED` table with `normalize.diff_rows`: make, model, series,
+trim, body class, drive type, both fuel types, electrification level, the GVWR
+band and model year. The gate does not compare the error and correction
+elements.
 
-| what | why |
-|---|---|
-| secret `XAI_API_KEY` | enables the agent fix job and the model leg of the review gate (without it, failures land in the job summary for a human) |
-| var `DATA_REFRESH_AUTOMERGE=true` | merge **data-only** PRs: after the key pin lands, `answer-key.yaml`'s publish job waits for the required checks (CI + `review-verdict`) and squash-merges synchronously |
-| var `DATA_REFRESH_AUTOMERGE_SCHEMA=true` | extend merging to **schema-change** PRs too, including agent-fixed ones — the full-autonomy switch; leave off to keep a human on the merge button when decoder code changed |
-| var `DATA_REFRESH_AUTORELEASE=true` | after merging, also push the next patch `v` tag and dispatch `release.yaml` on it to ship PyPI |
+Each difference prints its VIN, element, field and both answers, and the gate
+exits 1. A VIN that the oracle crashes on is skipped only when
+`scripts/known_problems.json` registers it as an `oracle-crash`. Any other crash
+fails the gate. The gate also fails when it compares no VIN, and when the
+decodes come from this repository instead of the installed wheel. Exit 0 means
+that the gate compared at least one VIN and found no difference.
 
-No GitHub App and no PAT anywhere: `GITHUB_TOKEN` *events* never trigger
-workflows, but explicit `workflow_dispatch` calls are exempt — so the pipeline
-kicks `ci.yaml` and `data-review.yaml` itself after creating a PR, dispatches
-`answer-key.yaml` on the branch, and that build's publish job runs the
-merge/tag/release chain (`.github/actions/merge-data-pr`) once the pin is in
-the PR. One side effect: the merge commit lands on master without a redundant
-master-push CI run — the identical tree was just fully checked on the branch.
-The `data-YYYY_MM` tag is created by the key build (targeting the branch head
-the key was frozen from), so a hand-merge needs no tagging; but a month
-hand-merged *without* its key leaves master's answerkey gate red until the
-push-triggered safety-net build opens a pin PR and it merges.
+## A failed statement stops the oracle load
 
-Defaults with zero setup: PRs are opened and checks run; merging, releasing,
-and agent fixes are off.
-
-**One GitHub setting is load-bearing:** "Allow GitHub Actions to create and
-approve pull requests" (Settings → Actions → General → Workflow permissions)
-must be enabled at **both** the org and repo level, or `gh pr create` from any
-workflow 403s regardless of job permissions — the July 2026 live run hit
-exactly this (the agent escalated via issue, as designed).
-
-**Selfcheck:** `gh workflow run data-refresh-selfcheck.yaml` proves the agent's
-prerequisites in under a minute with zero API spend — `detect` runs on a bare
-runner, the environment mounts a valid `XAI_API_KEY`, and `GITHUB_TOKEN`
-can create a PR (via a `[skip ci]` canary that is closed and deleted
-immediately). Run it after changing the settings above or rotating the key.
+`make oracle-load`, `make oracle-pool-load` and `make refresh` stop when any
+statement of the dump fails. They run `psql` with `ON_ERROR_STOP`. First, they
+remove the lines that a newer `pg_dump` writes and Postgres 16 does not accept:
+`\restrict`, `\unrestrict` and `SET transaction_timeout`. `make oracle-up` and
+`make oracle-pool-up` return when each oracle answers a query over TCP, so a
+load can start immediately after them.
 
 ## Failure playbook
 
 - **build-data sha256 mismatch on an old PR/branch** — NHTSA re-touched the
-  pinned month's file. The daily `detect` also catches this (`reason=reissue`,
-  via the URL's `Content-Length` vs the manifest's `dump_bytes`) and opens a
-  refresh PR for the *same* month with the new hash.
+  pinned month's file. `make refresh-detect` also catches this
+  (`reason=reissue`, via the URL's `Content-Length` vs the manifest's
+  `dump_bytes`). Refresh the *same* month to pin the new hash.
 - **corpus/sweep gate names an unknown VIN** — either the decoder no longer
   matches the new data (fix Rust) or the dump itself is defective (oracle
   crash, stale cache table — precedent in `docs/KNOWN_DEVIATIONS.md`). The
-  agent triages. The gates accept a diverging VIN from exactly two sources:
+  gates accept a diverging VIN from exactly two sources:
   registration in `scripts/known_problems.json`, which needs a named defective
   upstream artifact and not just the diff; or adjudication into the
   machine-enumerated stale-cache class, which needs the diff to touch only
@@ -222,7 +178,7 @@ immediately). Run it after changing the settings above or rotating the key.
   hand-edited or its halves came from different scans, so regenerate it rather
   than patch it. `REJECTED` names either a jump past 500 newly stale cells *in
   the charset-regression shape* (recompute-only rows leapt, or the stale-cell
-  count doubled — confirm `answerkey verify` is green and read
+  count doubled — confirm the corpus and sweep gates are green and read
   `target/refresh/stale_cache.json`) or a non-empty
   `vpic.wmiyearvalidchars_cacheexceptions`, which is upstream changing how the
   proc reads the cache and needs a human to re-derive the scan's assumptions
@@ -251,8 +207,8 @@ immediately). Run it after changing the settings above or rotating the key.
   deviation (that path no longer samples a fresh corpus at all). A crash the
   *sweep* hits is the one that bites: it lands in `oracle_errors` and **fails**
   the sweep gate unless the VIN is registered as `oracle-crash`. Neither path
-  produces a mechanical traceback; either way the agent documents the VIN per
-  `KNOWN_DEVIATIONS.md` before it can go green.
+  produces a mechanical traceback. Either way, document the VIN per
+  `KNOWN_DEVIATIONS.md` before the run can go green.
 - **re-issued pin detection** — `detect` compares the pinned URL's
   `Content-Length` against `dump_bytes` in the manifest (recorded since
   2026_07); a same-size re-issue is invisible to HEAD probes and surfaces as a
@@ -262,7 +218,3 @@ immediately). Run it after changing the settings above or rotating the key.
 - **January runs** — the corpus records `oracle_current_year`; a fresh freeze
   always matches the current year, so the year-skip guard in
   `tests/test_parity_corpus.py` only bites stale corpora, not refreshed ones.
-
-Manual override: `gh workflow run data-refresh.yaml -f month=2026_08` (also the
-way to re-run after closing a failed PR — the daily cron won't stack a second
-run while a `data/<month>` PR is open).

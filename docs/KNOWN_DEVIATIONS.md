@@ -44,8 +44,8 @@ the section here once its last VIN is gone.
 
 **Healed in dump 2026_09.** The dump no longer carries the uncompilable
 `[1-A-JT]` pattern key, and every previously registered 7T0 crash VIN now
-decodes in exact field-for-field parity with the oracle. The intake predicate
-in `scripts/parity/regex_crash.py` remains so a return of the rows would still
+decodes in exact field-for-field parity with the oracle. The predicate
+`is_expected_crash` in `scripts/parity/regex_crash.py` remains so a return of the rows would still
 be recognised; there is no live registry class for this defect.
 
 The rest of this section is the 2026_08 evidence, kept as history.
@@ -165,18 +165,18 @@ MY2023-2025 VIN reaching a sweep fails that gate until a human re-verifies it
 against this section.
 
 **Machine-classified at covfuzz intake.** The gate is not where the fuzzer meets
-this class. Every night covfuzz re-finds fresh members — exact-VIN dedupe cannot
-see that two 7T0 VINs are one defect — and each one used to cost an agent PR that
-appended one more sample of an unbounded class. `scripts/parity/regex_crash.py`
-adjudicates them instead, and nightly.yaml drops a covfuzz failure record only
-when all three hold: it is a **crash** record (an `error`, no `field_diffs` or
-`fingerprint`), that error carries both the `InvalidRegularExpression` and the
-`vpic.fvalidcharsinregex` markers this defect raises, and ultravin's own full
+this class. Each covfuzz run re-finds fresh members, and exact-VIN dedupe cannot
+see that two 7T0 VINs are one defect. `scripts/parity/regex_crash.py`
+adjudicates them instead: `is_expected_crash` puts a covfuzz failure record in
+this class only when all three hold: it is a **crash** record (an `error`, no
+`field_diffs` or `fingerprint`), that error carries both the
+`InvalidRegularExpression` and the `vpic.fvalidcharsinregex` markers this
+defect raises, and ultravin's own full
 decode of the VIN actually selects the defective pattern — some element's `keys`
 contains the literal `[1-A-JT]`. It keys on the defect, not on WMI `7T0` and not
 on `vin_schema_id = 24522`, so it survives the renumbering each monthly dump
-brings. Fail any axis and the record is filed; fail to be judged at all and it is
-filed with a `::warning::`.
+brings. Fail any axis and `is_expected_crash` returns `False`. An error it
+cannot judge propagates to the caller.
 
 **Intake suppression is not gate suppression.** Nothing above changes what the
 gates do: `refresh.sweep_gate` still fails on any crash VIN that reaches a sweep
@@ -256,8 +256,8 @@ is the resulting `[wmi, year, positions]` list**: **7,062 stale cells in dump
 for this class. Every monthly refresh reruns the scan and rewrites the file from
 it — `scripts/refresh.py` invokes `vpic-import --stale-cache-report` and hands the
 report to `stale_cache.write_cells`, and the `stale-cache` gate then validates the
-result — so the list is always this month's dump; the full report rides out as the
-run's `data-refresh-report` artifact. A month-over-month change in the list is the
+result — so the list is always this month's dump; the full report is written to
+`target/refresh/stale_cache.json`. A month-over-month change in the list is the
 expected signal, not a failure — it self-documents in the refresh PR diff.
 
 Three cells worked through, the ones four still-registered `clean-decode` VINs
@@ -459,18 +459,16 @@ with the flagged positions rewritten, so the two SuggestedVINs compare character
 by character. Elements 143/156/191 are per-decode summaries with no position of
 their own and can only ride along. A divergence whose evidence names no position
 at all is **not** this class. The corpus and sweep gates count the ones that
-qualify as the known class; the nightly covfuzz intake drops them instead of
-filing backlog work. Everything else fails exactly as before.
+qualify as the known class. Everything else fails exactly as before.
 
-**Containment is the intake's first pass, not its only one.** Containment reads
+**Containment is the first test, not the only one.** Containment reads
 the *printed* evidence, and a stale cell does more with a charset than print it:
 it can flip the error **count** — moving `spvindecode_errorcode` between its
 single- and multi-error rungs (§5, and the 2-vs-3 shape in §4) — or move the
 model year the decode settles on (§2.3). Both re-render positions that are not
-themselves stale, so no containment test can ever pass them, and every night's
-covfuzz probe re-found them and filed them as fresh backlog work. Since 2026-09
-the intake puts what containment refuses to the same experiment
-`answerkey.classify` runs — `stale_cache.counterfactual_verdicts`: freshen the
+themselves stale, so no containment test can ever pass them.
+`answerkey.classify` puts what containment refuses to an experiment,
+`stale_cache.counterfactual_verdicts`: freshen the
 stale cells in a rolled-back transaction, re-decode, and drop the record only if
 the freshened oracle reproduces ultravin byte for byte, with the same policy
 scope on top (error elements only, or a year flip that collapses on the oracle's
@@ -479,18 +477,13 @@ vehicle and does not collapse is still filed — that is a clean-decode deviatio
 for a human to register.
 
 The evidence is taken **only from the oracle running the experiment**, never
-from the record that reported the divergence: the probe that produced it runs
-against a separate fast-procs oracle, so the byte-faithful one is asked to
+from the record that reported the divergence: that record can come from a
+separate fast-procs oracle, so the byte-faithful one is asked to
 decode the VIN itself and must disagree with ultravin before any excuse is
 possible, and the scope gate reads *its* diff. That precondition is also what
 keeps a cell that is not stale from excusing anything — freshening it is a no-op,
 so a "reproduction" there would mean the two never disagreed, and forgiving that
-would launder an unrelated difference into this class. Two deliberate
-differences from the answer key: the intake **files and warns** where `classify`
-exits 2 on cell-list drift (drift disables the excuse for the whole run, and
-bricking the lane would throw away the agent's night over a fact that only ever
-excuses less), and it examines at most 500 VINs across 100 WMIs a night, filing
-the rest unexamined.
+would launder an unrelated difference into this class.
 
 **What keeps a decoder bug out of the list — and what does not.** The list is
 computed from the dump alone, never from an observed ultravin-vs-oracle
@@ -703,13 +696,9 @@ stale positions, and an extra named position is a verdict of *not* that class �
 and the VIN has to be registered here.
 
 That is a statement about *containment*, and it still holds: nothing below is
-excused by the cell list, and the gates are unchanged. What did change is who
-pays for the rediscovery. The nightly covfuzz intake re-found this shape every
-night and filed it as fresh backlog work, because containment is all it had;
-since 2026-09 it re-asks a freshened oracle instead (§2, *Containment is the
-intake's first pass*) and drops what the experiment reproduces. The registration
-here is what documents the class; the intake merely stops paying an agent night
-to rediscover it.
+excused by the cell list, and the gates are unchanged. The experiment in §2
+(*Containment is the first test*) can reproduce this shape on a freshened
+oracle. The registration here is what documents the class.
 
 Two shapes, same rung, opposite direction:
 
@@ -902,8 +891,8 @@ are what the oracle itself produces once the stale cell is gone.
 ## How the answer key carries these deviations
 
 The monthly answer key (`scripts/parity/answerkey.py`, policy in
-`docs/ACCEPTANCE.md`) freezes one hash per VIN and re-checks it on every PR with
-no Postgres anywhere. That works only if the key has something to say about the
+`docs/ACCEPTANCE.md`) freezes one hash per VIN, and `answerkey verify`
+re-checks it with no Postgres anywhere. That works only if the key has something to say about the
 VINs on this page, where the oracle's answer is the defect. It says it with two
 prefixes, neither of them a hex digit:
 

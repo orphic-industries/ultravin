@@ -1,16 +1,25 @@
 #!/usr/bin/env bash
-# Stamp a release-tag version (vX.Y.Z) into the workspace Cargo.toml and Cargo.lock.
+# Stamp a release tag's version into the workspace Cargo.toml and Cargo.lock.
 # The repo permanently carries version 0.0.0; CI runs this before building wheels.
 # The version flows everywhere: maturin reads it for the wheel/sdist (pyproject's
 # dynamic version), and the py crate exposes it as ultravin.__version__.
+#
+#   vX.Y.Z              -> X.Y.Z
+#   vX.Y.Z-vpicYYYY_MM  -> X.Y.Z+vpic.YYYY.MM  (vpic-release.yaml's month tags)
+#
+# The month rides in semver build metadata, which maturin carries into the
+# wheel as a PEP 440 local version.
 set -euo pipefail
 
-TAG="${1:?usage: stamp-version.sh vX.Y.Z}"
-[[ "$TAG" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]] || {
-    echo "release tag must be vX.Y.Z, got: $TAG" >&2
+TAG="${1:?usage: stamp-version.sh vX.Y.Z[-vpicYYYY_MM]}"
+if [[ "$TAG" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+    V="${BASH_REMATCH[1]}"
+elif [[ "$TAG" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)-vpic([0-9]{4})_(0[1-9]|1[0-2])$ ]]; then
+    V="${BASH_REMATCH[1]}+vpic.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}"
+else
+    echo "release tag must be vX.Y.Z or vX.Y.Z-vpicYYYY_MM, got: $TAG" >&2
     exit 1
-}
-V="${BASH_REMATCH[1]}"
+fi
 
 # Workspace version (the three crates inherit it via version.workspace = true).
 # No trailing $ anchors: tolerate CRLF checkouts on Windows runners.
@@ -23,9 +32,9 @@ for crate in ultravin ultravin-build ultravin-py; do
 done
 rm -f Cargo.toml.bak Cargo.lock.bak
 
-grep -q "^version = \"$V\"" Cargo.toml || { echo "failed to stamp Cargo.toml" >&2; exit 1; }
+grep -qF "version = \"$V\"" Cargo.toml || { echo "failed to stamp Cargo.toml" >&2; exit 1; }
 for crate in ultravin ultravin-build ultravin-py; do
-    grep -A1 "^name = \"$crate\"" Cargo.lock | grep -q "^version = \"$V\"" \
+    grep -A1 "^name = \"$crate\"" Cargo.lock | grep -qF "version = \"$V\"" \
         || { echo "failed to stamp $crate in Cargo.lock" >&2; exit 1; }
 done
 echo "stamped version $V"
