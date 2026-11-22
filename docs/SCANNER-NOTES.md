@@ -102,8 +102,8 @@ shipped Python wheel and has no in-repo caller.
 supply chain. It is a developer convenience for bootstrapping `uv` on a fresh
 checkout and runs only when someone invokes it interactively without `uv`
 already installed. No workflow shells out to `make install-uv`, so it never runs
-in CI: both workflows (`ci` and `security`) install `uv` through
-`astral-sh/setup-uv`, pinned to a commit SHA.
+in CI: every workflow that needs `uv` (`ci`, `security` and `vpic-release`)
+installs it through `astral-sh/setup-uv`, pinned to a commit SHA.
 
 ## h. CVEs in `psycopg[binary]`'s bundled libpq
 

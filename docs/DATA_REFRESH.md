@@ -2,10 +2,12 @@
 
 NHTSA publishes a new standalone vPIC database roughly monthly
 (`vPICList_lite_YYYY_MM.plain.zip`, observed day 9–18, kept online ~8 months,
-occasionally re-touched after publication). No workflow in this fork detects,
-integrates or merges a month. A person runs `scripts/refresh.py`, commits what
-it writes, and opens a pull request that a person merges. CI checks that pull
-request like any other.
+occasionally re-touched after publication). `.github/workflows/vpic-release.yaml`
+detects a new month every day, runs the importer, compares the month's wheel
+with NHTSA's procedure, and opens a `data/vpic-<YYYY_MM>` pull request that
+carries only the importer's output. A person runs `scripts/refresh.py` on that
+branch to re-freeze the corpus and run the gates below, pushes what it writes,
+and merges the pull request. Nothing merges a month on its own.
 
 ## The mechanical path
 
