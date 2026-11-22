@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import contextlib
 from pathlib import Path
 from typing import Any
 
 import pytest
-from typing_extensions import Self
 
 from scripts.parity import release_gate
 
@@ -14,7 +14,7 @@ VIN = "1HGCM82633A004352"
 
 # The vPIC element ids of the canned decode, and their values.
 _VALUES = {26: "HONDA", 28: "Accord", 29: "2003", 5: "Sedan/Saloon"}
-_OUTSIDE = 143  # an error element: the gate leaves it to the known-problems gate
+_OUTSIDE = 143  # an error element, which the gate does not compare
 
 
 def _wheel_element(element_id: int, value: str) -> dict[str, Any]:
@@ -110,6 +110,13 @@ def _crash(vin: str) -> list[dict[str, Any]]:
     raise release_gate.OracleCrashError(msg)
 
 
+def _crash_on(crash_vin: str) -> Any:
+    def decode(vin: str) -> list[dict[str, Any]]:
+        return _crash(vin) if vin == crash_vin else []
+
+    return decode
+
+
 def test_an_unregistered_oracle_crash_fails() -> None:
     report = release_gate.compare([_case(_VALUES)], _crash, frozenset())
 
@@ -118,44 +125,110 @@ def test_an_unregistered_oracle_crash_fails() -> None:
 
 
 def test_a_registered_oracle_crash_is_skipped() -> None:
-    report = release_gate.compare([_case(_VALUES)], _crash, frozenset({VIN}))
+    report = release_gate.compare(
+        [_case(_VALUES), release_gate.Case("1G1", "seeded", [])], _crash_on(VIN), frozenset({VIN})
+    )
 
-    assert report.ok
+    assert report.differences == []
     assert report.excused_crashes == [VIN]
+    assert report.compared == 1
 
 
-def _stub_wheel(monkeypatch: pytest.MonkeyPatch, oracle_values: dict[int, str]) -> None:
+def _stub_wheel(monkeypatch: pytest.MonkeyPatch, cases: list[release_gate.Case], oracle_values: dict[int, str]) -> None:
     def wheel_cases(wheel: Path, **_: Any) -> tuple[dict[str, Any], list[release_gate.Case]]:
-        return {"module": "site-packages/ultravin/__init__.py", "version": "0.0.0"}, [_case(_VALUES)]
-
-    class _Conn:
-        def __enter__(self) -> Self:
-            return self
-
-        def __exit__(self, *exc: object) -> None:
-            return None
+        return {"module": "/env/site-packages/ultravin/__init__.py", "version": "0.0.0"}, cases
 
     monkeypatch.setattr(release_gate, "wheel_cases", wheel_cases)
-    monkeypatch.setattr(release_gate.oracle, "connect", _Conn)
+    monkeypatch.setattr(release_gate.oracle, "connect", lambda batch: contextlib.nullcontext(object()))
+    monkeypatch.setattr(release_gate, "check_unmodified", lambda conn: None)
     monkeypatch.setattr(release_gate, "_oracle_decoder", lambda conn: _oracle(oracle_values))
 
 
-def test_main_exits_0_with_no_difference(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-    _stub_wheel(monkeypatch, _VALUES)
+@pytest.fixture
+def wheel(tmp_path: Path) -> str:
+    path = tmp_path / "ultravin-0.0.0-cp310-abi3-any.whl"
+    path.write_bytes(b"")
+    return str(path)
 
-    assert release_gate.main(["ultravin.whl"]) == 0
+
+def test_main_exits_0_with_no_difference(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], wheel: str
+) -> None:
+    _stub_wheel(monkeypatch, [_case(_VALUES)], _VALUES)
+
+    assert release_gate.main([wheel]) == 0
     assert capsys.readouterr().out == ""
 
 
 def test_main_exits_1_and_prints_the_difference(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], wheel: str
 ) -> None:
-    _stub_wheel(monkeypatch, {**_VALUES, 26: "ACURA"})
+    _stub_wheel(monkeypatch, [_case(_VALUES)], {**_VALUES, 26: "ACURA"})
 
-    assert release_gate.main(["ultravin.whl"]) == 1
+    assert release_gate.main([wheel]) == 1
     out = capsys.readouterr().out
     assert VIN in out
     assert "Make value: oracle='ACURA' wheel='HONDA'" in out
+
+
+def test_main_exits_1_when_no_vin_is_compared(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], wheel: str
+) -> None:
+    _stub_wheel(monkeypatch, [], _VALUES)
+
+    assert release_gate.main([wheel]) == 1
+    assert "no VIN was compared" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("path", ["", "target/wheels", "ultravin.tar.gz"])
+def test_main_refuses_a_path_that_is_not_a_wheel(path: str) -> None:
+    with pytest.raises(SystemExit, match="2"):
+        release_gate.main([path])
+
+
+def test_decodes_from_inside_the_repository_fail(tmp_path: Path) -> None:
+    info = {"module": str(tmp_path / "python" / "ultravin" / "__init__.py")}
+
+    with pytest.raises(release_gate.GateError, match="inside this repository"):
+        release_gate.check_installed(info, repo=tmp_path)
+
+
+def test_decodes_from_the_wheel_environment_pass(tmp_path: Path) -> None:
+    release_gate.check_installed({"module": "/env/site-packages/ultravin/__init__.py"}, repo=tmp_path)
+
+
+class _Cursor:
+    def __init__(self, n: int) -> None:
+        self.n = n
+
+    def __enter__(self) -> Any:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        return None
+
+    def execute(self, sql: str) -> None:
+        return None
+
+    def fetchone(self) -> dict[str, int]:
+        return {"n": self.n}
+
+
+class _FakeConn:
+    def __init__(self, n: int) -> None:
+        self.n = n
+
+    def cursor(self) -> _Cursor:
+        return _Cursor(self.n)
+
+
+def test_an_oracle_with_rewritten_procs_fails() -> None:
+    with pytest.raises(release_gate.GateError, match="ULTRAVIN_ORACLE_FAST_PROCS unset"):
+        release_gate.check_unmodified(_FakeConn(3))
+
+
+def test_an_oracle_with_nhtsas_procs_passes() -> None:
+    release_gate.check_unmodified(_FakeConn(0))
 
 
 def test_a_failed_wheel_install_stops_the_gate(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -166,5 +239,5 @@ def test_a_failed_wheel_install_stops_the_gate(monkeypatch: pytest.MonkeyPatch, 
 
     monkeypatch.setattr(release_gate.subprocess, "run", lambda *a, **k: _Failed())
 
-    with pytest.raises(RuntimeError, match="no such wheel"):
+    with pytest.raises(release_gate.GateError, match="no such wheel"):
         release_gate.wheel_cases(tmp_path / "x.whl", cover=None, seeded=0, generate=0, seed=0)

@@ -14,7 +14,8 @@ parts live elsewhere:
   section per class. This doc says *how* an entry earns its place; the registry
   *is* the list and that doc is the proof.
 - **`docs/DATA_REFRESH.md`** — the monthly runbook and the gate mechanics
-  (corpus / sweep / known-problems / coverage / pytest / cargo).
+  (corpus / sweep / known-problems / coverage / pytest / cargo), and the
+  release gate that compares a built wheel with the oracle.
 - **`scripts/parity/normalize.py`** — the executable form of "what counts as
   passing" below.
 
