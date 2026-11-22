@@ -18,7 +18,7 @@ cli = [
 ]
 
 [project.scripts]
-ultravin = "ultravin.cli:main"
+ultravin = "ultravin._entry:main"
 
 [dependency-groups]
 dev = [
@@ -55,8 +55,9 @@ build-backend = "maturin"
 # its compiled-in roots trust the leaked eMudhra CA keys (CVE-2026-111943).
 # setup-uv reads this too.
 required-version = ">=0.13.4"
-# Supply-chain cooldown: never be the first installer of a fresh release. The
-# nightly lifts it per package for security fixes (scripts/bump_deps.py uv-fixes).
+# Supply-chain cooldown: never be the first installer of a fresh release.
+# `scripts/bump_deps.py uv-fixes` prints the flags that lift it per package for
+# a security fix.
 exclude-newer = "7 days"
 
 [tool.maturin]
