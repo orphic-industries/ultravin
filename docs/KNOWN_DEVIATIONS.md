@@ -165,11 +165,10 @@ MY2023-2025 VIN reaching a sweep fails that gate until a human re-verifies it
 against this section.
 
 **Machine-classified at covfuzz intake.** The gate is not where the fuzzer meets
-this class. Every night covfuzz re-finds fresh members — exact-VIN dedupe cannot
-see that two 7T0 VINs are one defect — and each one used to cost an agent PR that
-appended one more sample of an unbounded class. `scripts/parity/regex_crash.py`
-adjudicates them instead, and nightly.yaml drops a covfuzz failure record only
-when all three hold: it is a **crash** record (an `error`, no `field_diffs` or
+this class. Each covfuzz run re-finds fresh members, and exact-VIN dedupe cannot
+see that two 7T0 VINs are one defect. `scripts/parity/regex_crash.py`
+adjudicates them instead: `is_expected_crash` puts a covfuzz failure record in
+this class only when all three hold: it is a **crash** record (an `error`, no `field_diffs` or
 `fingerprint`), that error carries both the `InvalidRegularExpression` and the
 `vpic.fvalidcharsinregex` markers this defect raises, and ultravin's own full
 decode of the VIN actually selects the defective pattern — some element's `keys`
@@ -256,8 +255,8 @@ is the resulting `[wmi, year, positions]` list**: **7,062 stale cells in dump
 for this class. Every monthly refresh reruns the scan and rewrites the file from
 it — `scripts/refresh.py` invokes `vpic-import --stale-cache-report` and hands the
 report to `stale_cache.write_cells`, and the `stale-cache` gate then validates the
-result — so the list is always this month's dump; the full report rides out as the
-run's `data-refresh-report` artifact. A month-over-month change in the list is the
+result — so the list is always this month's dump; the full report is written to
+`target/refresh/stale_cache.json`. A month-over-month change in the list is the
 expected signal, not a failure — it self-documents in the refresh PR diff.
 
 Three cells worked through, the ones four still-registered `clean-decode` VINs

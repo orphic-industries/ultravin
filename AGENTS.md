@@ -11,7 +11,12 @@
 ### Git
 
 - Push your own work straight to `master`; don't open a PR for it.
-- Never name a hand-made branch `data/*`, `deps/*` or `fix/*`. Those belong to the automation, and the review gate judges them as unattended bot work.
+
+### Automation
+
+- CI runs `.github/workflows/ci.yaml` and `.github/workflows/security.yaml`, and nothing else. Neither merges, tags, nor publishes.
+- No workflow bumps dependencies, refreshes data, reviews pull requests, or publishes a wheel or crate. Dependencies stay at `uv.lock` and `Cargo.lock` until a person changes them.
+- A data month lands through `make refresh` and a pull request a person merges. See `docs/DATA_REFRESH.md`.
 
 ### Code Conventions
 
