@@ -7,16 +7,23 @@ description = "Pure-Rust NHTSA vPIC VIN decoder — CLI + library, with spVinDec
 readme = "README.md"
 requires-python = ">=3.10"
 dynamic = ["version"]
-dependencies = [
+dependencies = []
+license = "MIT"
+
+[project.optional-dependencies]
+# Only the `ultravin` command needs typer; the library imports nothing outside
+# the standard library. `pip install 'ultravin[cli]'` for the command.
+cli = [
     "typer",
 ]
-license = "MIT"
 
 [project.scripts]
 ultravin = "ultravin.cli:main"
 
 [dependency-groups]
 dev = [
+    # The tests and scripts run the CLI, so a plain `uv sync` installs it too.
+    "ultravin[cli]",
     "maturin>=1.7,<2",
     # psycopg-binary is wheel-only and trails new CPython releases; the marker
     # keeps prerelease-Python CI rows syncable. Lift it when cp315 wheels ship.
