@@ -107,14 +107,14 @@ in CI: both workflows (`ci` and `security`) install `uv` through
 
 ## h. CVEs in `psycopg[binary]`'s bundled libpq
 
-`pyproject.toml:26`. SCA tools (pip-audit, Trivy, OSV, Snyk) periodically report
+`pyproject.toml:32`. SCA tools (pip-audit, Trivy, OSV, Snyk) periodically report
 libpq or OpenSSL advisories against `psycopg-binary`, because its wheels bundle
 their own copies of those libraries rather than linking the system ones, and the
 bundled copies lag distro patching. The dependency is in the `dev` dependency
 group, used only by the parity tooling to talk to the local oracle. It is not a
 runtime dependency of the `ultravin` package — `[project].dependencies` is
-`typer` alone — so it is absent from the published wheel and from any
-environment that merely installs Ultravin.
+empty — so it is absent from the wheel and from any environment that merely
+installs Ultravin.
 
 ## i. VINs in `tests/parity_corpus.json`
 

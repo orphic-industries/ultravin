@@ -71,9 +71,10 @@ new data outgrows them.
 
 Exit 0 = integrated and green; exit 2 = gates failed (report still written to
 `target/refresh/report.{md,json}`); exit 1 = mechanical breakage. Paste
-`target/refresh/report.md` into the pull request body. It carries the data-only vs schema-change classification (`git status` on
-`vpic/schema` + `vpic/procs` — the importer strips volatile dump noise, so a
-data-only month diffs clean there), manifest row/table/function deltas, lookup
+`target/refresh/report.md` into the pull request body. It carries the
+data-only vs schema-change classification (`git status` on `vpic/schema` +
+`vpic/procs` — the importer strips volatile dump noise, so a data-only month
+diffs clean there), manifest row/table/function deltas, lookup
 value changes, gate results, and follow-ups (e.g. a new oracle-crash VIN freeze
 had to skip).
 
@@ -131,7 +132,7 @@ against the committed freeze.
   hand-edited or its halves came from different scans, so regenerate it rather
   than patch it. `REJECTED` names either a jump past 500 newly stale cells *in
   the charset-regression shape* (recompute-only rows leapt, or the stale-cell
-  count doubled — confirm `make answerkey-verify` is green and read
+  count doubled — confirm the corpus and sweep gates are green and read
   `target/refresh/stale_cache.json`) or a non-empty
   `vpic.wmiyearvalidchars_cacheexceptions`, which is upstream changing how the
   proc reads the cache and needs a human to re-derive the scan's assumptions
