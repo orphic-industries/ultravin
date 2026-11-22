@@ -111,6 +111,39 @@ so `run` also freezes every vpic table with ≤ 512 rows into `vpic/lookups.json
 the rename becomes a one-line PR diff, and the report names each changed value
 against the committed freeze.
 
+## A built wheel must match the oracle
+
+The gates above test the dev build. `scripts/parity/release_gate.py` tests the
+artifact a release would publish: it installs a built wheel into a throwaway
+environment and compares it with the oracle on VINs the wheel generates from its
+own data.
+
+```bash
+make build-wheel
+make oracle-up
+make oracle-load DUMP=downloads/vPICList_lite_2026_11.plain.zip
+make release-gate WHEEL=target/wheels/ultravin-*.whl
+```
+
+Load the oracle with `ULTRAVIN_ORACLE_FAST_PROCS` unset, so that the gate
+compares with NHTSA's unmodified `spvindecode`. The VINs are every
+`cover_vins()` VIN, 1,000 from `seeded()` and 1,000 from `generate()`. Change
+the counts with `ARGS="--cover N --seeded N --generate N"`. The gate compares
+the vehicle elements in its `GATED` table with `normalize.diff_rows`: make,
+model, series, trim, body class, drive type, both fuel types, electrification
+level, the GVWR band and model year. The error and correction elements are left
+to the known-problems gate.
+
+Each difference prints its VIN, element, field and both answers, and the gate
+exits 1. A VIN that the oracle crashes on is skipped only when
+`scripts/known_problems.json` registers it as an `oracle-crash`. Any other crash
+fails the gate. Exit 0 means no difference.
+
+`make oracle-load` fails when any statement of the dump fails. It runs `psql`
+with `ON_ERROR_STOP`. First, it removes the lines that a newer `pg_dump` writes
+and Postgres 16 does not accept: `\restrict`, `\unrestrict` and
+`SET transaction_timeout`.
+
 ## Failure playbook
 
 - **build-data sha256 mismatch on an old PR/branch** — NHTSA re-touched the

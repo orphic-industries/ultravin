@@ -107,6 +107,9 @@ oracle-load:  ## Load a dump into the oracle (usage: make oracle-load DUMP=path.
 oracle-decode:  ## Decode a VIN via the oracle (usage: make oracle-decode VIN=...).
 	@bash scripts/oracle.sh decode "$(VIN)"
 
+release-gate:  ## Compare a built wheel with the oracle's unmodified spvindecode (usage: make release-gate WHEEL=target/wheels/x.whl [ARGS=...]).
+	@uv run -- python -m scripts.parity.release_gate "$(WHEEL)" $(ARGS)
+
 oracle-down:  ## Stop and remove one oracle (ULTRAVIN_ORACLE_SVC, default oracle); leaves the rest of the pool up.
 	@bash scripts/oracle.sh down
 
