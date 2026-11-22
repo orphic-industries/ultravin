@@ -1,23 +1,29 @@
 #!/usr/bin/env python3
-"""Prove an INSTALLED ultravin artifact actually decodes — the release smoke gate.
+"""Prove an INSTALLED ultravin artifact actually decodes. `make wheel-smoke` runs it.
 
-Nothing in the release pipeline imports a built wheel before publishing, yet
 build.rs can emit a wheel that imports fine but decodes nothing (its empty-data
 stub, used when vpic.rkyv is absent at build time). Given one or more built
 artifacts (wheels or an sdist) on argv, this: builds a throwaway venv, pip
 installs the artifact into it, and runs decode assertions *inside that venv* from
 a pristine temp dir — so the repo's python/ultravin/ source tree can never shadow
-the installed package. A dead artifact fails the gate (nonzero exit).
+the installed package. A dead artifact fails the smoke (nonzero exit).
 
-stdlib only, cross-platform: it runs on the Windows and macOS release runners too.
+It runs in two stages. The bare install must bring no dependency at all, decode,
+and have its console script name the cli extra. Then `pip install
+'<artifact>[cli]'` adds typer, and the console script must decode.
 
-Assertions run in the venv by re-executing a copy of this file with --in-venv:
-the compiled extension lives in the venv, not in the interpreter that launched
-the gate, and copying keeps sys.path[0] a clean directory with no ultravin in it.
+stdlib only, cross-platform: it runs on Windows and macOS too.
+
+Assertions run in the venv by re-executing a copy of this file with
+`--in-venv <stage>`: the compiled extension lives in the venv, not in the
+interpreter that launched the smoke, and copying keeps sys.path[0] a clean
+directory with no ultravin in it.
 """
 
 from __future__ import annotations
 
+import importlib.metadata
+import importlib.util
 import json
 import os
 import shutil
@@ -44,8 +50,15 @@ CONTRACT_VINS = [
     "SCFAAAAA7BA111111",  # correction errors (5, 14)
 ]
 
+STAGES = ("library", "cli")
 
-def run_checks() -> int:
+
+def unconditional_requirements(requires: list[str]) -> list[str]:
+    """The `Requires-Dist` entries a bare install pulls in: those no extra gates."""
+    return [r for r in requires if "extra ==" not in r]
+
+
+def run_checks(stage: str) -> int:
     """Assert the installed ultravin really decodes. Runs inside the venv."""
     import ultravin as uv  # noqa: PLC0415 - deferred: ultravin exists only in the venv, not the outer interpreter
 
@@ -79,24 +92,40 @@ def run_checks() -> int:
             return
         assert uv.__version__ == expected, f"__version__={uv.__version__!r} != expected {expected!r}"
 
-    def console_script() -> None:
+    def no_dependencies() -> None:
+        unconditional = unconditional_requirements(importlib.metadata.requires("ultravin") or [])
+        assert not unconditional, f"a bare install requires {unconditional}"
+        assert importlib.util.find_spec("typer") is None, "typer is installed without the cli extra"
+
+    def run_console_script() -> subprocess.CompletedProcess[str]:
         # No __main__.py exists, so `python -m ultravin` is not an entry point; the
-        # console script is what `pip install ultravin` actually gives a user. typer
-        # is a runtime dependency, so the bare wheel install already provides it.
+        # console script is what an install gives a user.
         exe = "ultravin.exe" if os.name == "nt" else "ultravin"
         script = Path(sys.executable).parent / exe
         assert script.exists(), f"console script not found at {script}"
-        proc = subprocess.run([str(script), "decode", CANARY_VIN], capture_output=True, text=True, check=False)
+        return subprocess.run([str(script), "decode", CANARY_VIN], capture_output=True, text=True, check=False)
+
+    def console_script_names_the_extra() -> None:
+        proc = run_console_script()
+        assert proc.returncode == 1, f"exit {proc.returncode}; stderr: {proc.stderr.strip()[:200]}"
+        assert "ultravin[cli]" in proc.stderr, f"stderr does not name the cli extra: {proc.stderr.strip()[:200]}"
+
+    def console_script() -> None:
+        proc = run_console_script()
         assert proc.returncode == 0, f"exit {proc.returncode}; stderr: {proc.stderr.strip()[:200]}"
         assert "HONDA" in proc.stdout, "console script output did not contain HONDA"
 
-    checks = [
-        ("ultravin imported from the installed venv (not a leaked path)", installed_in_venv),
-        ("decode returns a real artifact (not a stub)", stub_tell),
-        ("decode_json / decode_batch contract holds", json_and_batch_contract),
-        ("__version__ matches the release tag", version_truth),
-        ("console script decodes a VIN (exit 0)", console_script),
-    ]
+    checks = [("ultravin imported from the installed venv (not a leaked path)", installed_in_venv)]
+    if stage == "library":
+        checks += [
+            ("a bare install brings no dependency (no typer)", no_dependencies),
+            ("decode returns a real artifact (not a stub)", stub_tell),
+            ("decode_json / decode_batch contract holds", json_and_batch_contract),
+            ("__version__ matches the release tag", version_truth),
+            ("console script without typer names the cli extra (exit 1)", console_script_names_the_extra),
+        ]
+    else:
+        checks += [("console script decodes a VIN (exit 0)", console_script)]
     failures = 0
     for name, check in checks:
         try:
@@ -130,28 +159,37 @@ def smoke_artifact(artifact: Path) -> bool:
         venv.EnvBuilder(with_pip=True).create(venv_dir)
         py = _venv_python(venv_dir)
 
-        print(f"installing {artifact.name}...", flush=True)
-        install = subprocess.run(
-            [str(py), "-m", "pip", "install", "--disable-pip-version-check", "--no-input", str(artifact)],
-            env=_clean_env(),
-            check=False,
-        )
-        if install.returncode != 0:
-            print(f"FAIL: pip install {artifact.name} (exit {install.returncode})", flush=True)
-            return False
-        print(f"PASS: pip install {artifact.name}", flush=True)
-
         # Re-run this file from a pristine temp dir so its own directory (sys.path[0])
         # holds no ultravin package to shadow the installed one.
         checker = tmp / "wheel_smoke.py"
         shutil.copyfile(Path(__file__).resolve(), checker)
-        checks = subprocess.run([str(py), str(checker), "--in-venv"], cwd=str(tmp), env=_clean_env(), check=False)
-        return checks.returncode == 0
+
+        for stage, spec in (("library", str(artifact)), ("cli", f"{artifact}[cli]")):
+            label = f"{artifact.name}{'[cli]' if stage == 'cli' else ''}"
+            print(f"installing {label}...", flush=True)
+            install = subprocess.run(
+                [str(py), "-m", "pip", "install", "--disable-pip-version-check", "--no-input", spec],
+                env=_clean_env(),
+                check=False,
+            )
+            if install.returncode != 0:
+                print(f"FAIL: pip install {label} (exit {install.returncode})", flush=True)
+                return False
+            print(f"PASS: pip install {label}", flush=True)
+            checks = subprocess.run(
+                [str(py), str(checker), "--in-venv", stage], cwd=str(tmp), env=_clean_env(), check=False
+            )
+            if checks.returncode != 0:
+                return False
+        return True
 
 
 def main(argv: list[str]) -> int:
     if argv and argv[0] == "--in-venv":
-        return run_checks()
+        if len(argv) != 2 or argv[1] not in STAGES:
+            print(f"usage: wheel_smoke.py --in-venv {{{','.join(STAGES)}}}", file=sys.stderr)
+            return 2
+        return run_checks(argv[1])
     artifacts = [Path(a) for a in argv]
     if not artifacts:
         print("usage: wheel_smoke.py <wheel-or-sdist> [more ...]", file=sys.stderr)

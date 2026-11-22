@@ -1,33 +1,4 @@
 # Findings we accept deliberately. Everything else fails the zizmor job in
 # .github/workflows/security.yaml, so keep this list short and justified.
-rules:
-  dangerous-triggers:
-    ignore:
-      # data-review.yaml needs pull_request_target to read repo secrets when
-      # reviewing bot-authored data PRs. Audited: it checks out the base ref,
-      # never the PR head, so no untrusted code executes with that token.
-      - data-review.yaml
-
-  artipacked:
-    # These seven jobs `git push` a bot branch using the credential checkout
-    # persists into .git/config, so persist-credentials: false would break them.
-    # Every one is a publish job: a clean VM that runs no untrusted code and no
-    # local actions, which is precisely why it is the job trusted with a token.
-    # The real fix is persist-credentials: false + `gh auth setup-git` (the
-    # pattern in data-refresh-selfcheck.yaml, L38+L63); porting it here is
-    # deferred, not rejected.
-    #
-    # Pinned to the checkout's line so a NEW job that persists credentials still
-    # fails the gate. These pins fail closed, but silently: zizmor does not warn
-    # that an ignore went stale, so a line that drifts simply stops matching and
-    # the original finding comes back. If Security goes red with an artipacked
-    # finding at one of the checkouts below after an unrelated edit, the pin
-    # drifted — re-pin it rather than widening these to bare filenames.
-    ignore:
-      - answer-key.yaml:353   # job `publish` — pushes the pin onto the data branch (L441) or a pin branch (L502)
-      - data-refresh.yaml:113 # job `refresh` — pushes data/$MONTH (L155)
-      - data-refresh.yaml:469 # job `fix-publish` — re-pushes data/$MONTH after an agent fix (L520)
-      - nightly.yaml:183      # job `deps-publish` — pushes deps/nightly (L209)
-      - nightly.yaml:447      # job `deps-fix-publish` — re-pushes deps/nightly after a fix (L493)
-      - nightly.yaml:910      # job `deps-remedy-publish` — re-pushes deps/nightly after the check-remediation agent (L949)
-      - nightly.yaml:1723     # job `fixes-publish` — pushes the parity-fix branch (L1766)
+# There are none today.
+rules: {}

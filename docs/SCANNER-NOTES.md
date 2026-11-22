@@ -47,26 +47,6 @@ durability disabled because they hold nothing worth keeping, and
 `make oracle-load` rebuilds the whole thing from scratch in minutes.
 `oracle.py` honours `ULTRAVIN_ORACLE_DSN` for anyone pointing it elsewhere.
 
-## c. `pull_request_target` trigger
-
-`.github/workflows/data-review.yaml:14`. Scanners (zizmor, CodeQL's Actions
-pack, Snyk) flag `pull_request_target` because the classic failure mode is
-checking out and executing the PR's code with the elevated token. This workflow
-does the opposite: `actions/checkout` takes the base repo at `master` with no
-`ref:` override, so it always runs the trusted copy of the gate — a PR cannot
-edit its own judge — and it never executes PR code, only diffs it via `git` and
-`gh`. PRs from forks are diverted to `human-review` before any credential is
-mounted. The gate is split three ways so no job both judges untrusted content
-and can write: the adversarial reviewer runs in a `contents: read`-only job with
-no write token and no file-write or network tools (a hard Grok `--tools`
-allowlist of `read_file,grep,list_dir,run_terminal_command`), working from a
-pre-fetched head SHA and the PR body on disk rather than the API, and nothing
-runs after it in that job. The `checks: write` token that publishes
-`review-verdict` lives in a separate job that reads the verdict as data and
-checks out nothing the reviewer produced — so a prompt-injected reviewer cannot
-forge its own required check. The publish step fails closed: anything short of
-an explicit approval leaves the required `review-verdict` check red.
-
 ## d. `pickle` load and dump
 
 `scripts/parity/campaign.py:241` and `:250`
@@ -122,20 +102,19 @@ shipped Python wheel and has no in-repo caller.
 supply chain. It is a developer convenience for bootstrapping `uv` on a fresh
 checkout and runs only when someone invokes it interactively without `uv`
 already installed. No workflow shells out to `make install-uv`, so it never runs
-in CI: the five workflows that need `uv` (`ci`, `security`, `answer-key`,
-`data-refresh`, `nightly`) install it through `astral-sh/setup-uv`, pinned to a
-commit SHA.
+in CI: both workflows (`ci` and `security`) install `uv` through
+`astral-sh/setup-uv`, pinned to a commit SHA.
 
 ## h. CVEs in `psycopg[binary]`'s bundled libpq
 
-`pyproject.toml:26`. SCA tools (pip-audit, Trivy, OSV, Snyk) periodically report
+`pyproject.toml:32`. SCA tools (pip-audit, Trivy, OSV, Snyk) periodically report
 libpq or OpenSSL advisories against `psycopg-binary`, because its wheels bundle
 their own copies of those libraries rather than linking the system ones, and the
 bundled copies lag distro patching. The dependency is in the `dev` dependency
 group, used only by the parity tooling to talk to the local oracle. It is not a
 runtime dependency of the `ultravin` package — `[project].dependencies` is
-`typer` alone — so it is absent from the published wheel and from any
-environment that merely installs Ultravin.
+empty — so it is absent from the wheel and from any environment that merely
+installs Ultravin.
 
 ## i. VINs in `tests/parity_corpus.json`
 

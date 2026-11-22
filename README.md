@@ -36,11 +36,12 @@ server, no runtime data files. Install it and decode.
 ### Installation
 
 ```bash
-uv add ultravin
+uv add ultravin          # the library
+uv add 'ultravin[cli]'   # the library and the `ultravin` command
 ```
 
 Prebuilt wheels require **Python 3.10+** and nothing else — the data ships inside
-the wheel.
+the wheel. A bare install brings no dependency. The `cli` extra adds `typer`.
 
 ### Usage
 
@@ -110,7 +111,7 @@ default's ~41.
 (`element_id`, `group_name`, `data_type`, …). Pin to `element_id` if you need a
 key that survives NHTSA renaming a variable between data releases.
 
-From the command line:
+From the command line, with the `cli` extra installed:
 
 ```bash
 ultravin decode 1HGCM82633A004352             # JSON object
@@ -406,8 +407,8 @@ time; neither was re-measured here.
 - [Acceptance](docs/ACCEPTANCE.md) — the parity policy: what counts as passing, how a divergence is adjudicated
 - [Known deviations](docs/KNOWN_DEVIATIONS.md) — the vPIC defects ultravin does not reproduce, with evidence
 - [Corpora](docs/CORPUS.md) — `generate`, `cover_vins`, `sweep`: hitting every decode behaviour with the fewest VINs
-- [Data refresh](docs/DATA_REFRESH.md) — how the monthly NHTSA dump is integrated behind parity gates
-- [Release](docs/RELEASE.md) — tags, wheels, the embedded artifact, crates.io
+- [Data refresh](docs/DATA_REFRESH.md) — how to integrate a monthly NHTSA dump behind parity gates
+- [Builds and releases](docs/RELEASE.md) — tags, wheels, the embedded artifact, and why this fork publishes nothing
 
 ## License
 
