@@ -1,24 +1,23 @@
 #!/usr/bin/env python3
-"""Prove an INSTALLED ultravin artifact actually decodes — the release smoke gate.
+"""Prove an INSTALLED ultravin artifact actually decodes. `make wheel-smoke` runs it.
 
-Nothing in the release pipeline imports a built wheel before publishing, yet
 build.rs can emit a wheel that imports fine but decodes nothing (its empty-data
 stub, used when vpic.rkyv is absent at build time). Given one or more built
 artifacts (wheels or an sdist) on argv, this: builds a throwaway venv, pip
 installs the artifact into it, and runs decode assertions *inside that venv* from
 a pristine temp dir — so the repo's python/ultravin/ source tree can never shadow
-the installed package. A dead artifact fails the gate (nonzero exit).
+the installed package. A dead artifact fails the smoke (nonzero exit).
 
-It runs in two stages. The bare install must bring no dependency at all and still
-decode; then `pip install '<artifact>[cli]'` adds typer, and the console script
-must decode.
+It runs in two stages. The bare install must bring no dependency at all, decode,
+and have its console script name the cli extra. Then `pip install
+'<artifact>[cli]'` adds typer, and the console script must decode.
 
-stdlib only, cross-platform: it runs on the Windows and macOS release runners too.
+stdlib only, cross-platform: it runs on Windows and macOS too.
 
 Assertions run in the venv by re-executing a copy of this file with
-`--in-venv <stage>`:
-the compiled extension lives in the venv, not in the interpreter that launched
-the gate, and copying keeps sys.path[0] a clean directory with no ultravin in it.
+`--in-venv <stage>`: the compiled extension lives in the venv, not in the
+interpreter that launched the smoke, and copying keeps sys.path[0] a clean
+directory with no ultravin in it.
 """
 
 from __future__ import annotations
@@ -98,13 +97,21 @@ def run_checks(stage: str) -> int:
         assert not unconditional, f"a bare install requires {unconditional}"
         assert importlib.util.find_spec("typer") is None, "typer is installed without the cli extra"
 
-    def console_script() -> None:
+    def run_console_script() -> subprocess.CompletedProcess[str]:
         # No __main__.py exists, so `python -m ultravin` is not an entry point; the
-        # console script is what `pip install 'ultravin[cli]'` gives a user.
+        # console script is what an install gives a user.
         exe = "ultravin.exe" if os.name == "nt" else "ultravin"
         script = Path(sys.executable).parent / exe
         assert script.exists(), f"console script not found at {script}"
-        proc = subprocess.run([str(script), "decode", CANARY_VIN], capture_output=True, text=True, check=False)
+        return subprocess.run([str(script), "decode", CANARY_VIN], capture_output=True, text=True, check=False)
+
+    def console_script_names_the_extra() -> None:
+        proc = run_console_script()
+        assert proc.returncode == 1, f"exit {proc.returncode}; stderr: {proc.stderr.strip()[:200]}"
+        assert "ultravin[cli]" in proc.stderr, f"stderr does not name the cli extra: {proc.stderr.strip()[:200]}"
+
+    def console_script() -> None:
+        proc = run_console_script()
         assert proc.returncode == 0, f"exit {proc.returncode}; stderr: {proc.stderr.strip()[:200]}"
         assert "HONDA" in proc.stdout, "console script output did not contain HONDA"
 
@@ -115,6 +122,7 @@ def run_checks(stage: str) -> int:
             ("decode returns a real artifact (not a stub)", stub_tell),
             ("decode_json / decode_batch contract holds", json_and_batch_contract),
             ("__version__ matches the release tag", version_truth),
+            ("console script without typer names the cli extra (exit 1)", console_script_names_the_extra),
         ]
     else:
         checks += [("console script decodes a VIN (exit 0)", console_script)]
