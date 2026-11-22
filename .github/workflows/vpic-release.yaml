@@ -22,7 +22,7 @@
 # A pull request runs every job up to and including compare, and neither opens
 # a pull request nor publishes. Nothing here merges a pull request or uploads to
 # a package index. Dependencies install from the lock files as they are
-# (UV_FROZEN, cargo --locked). See README.md, "Releases".
+# (UV_FROZEN, cargo --locked). See README.md, "This fork".
 name: vPIC Release
 
 on:
