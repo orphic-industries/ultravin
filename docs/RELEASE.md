@@ -10,11 +10,11 @@ from a new month to a release are in the README, under "This fork".
 ## Versions come from tags
 
 The workspace `Cargo.toml` permanently says `0.0.0`.
-`.github/stamp-version.sh <tag>` writes a tag's version into
-`Cargo.toml` and `Cargo.lock` before a build, so the wheel, the sdist, and
-`ultravin.__version__` all carry it. Tag `vX.Y.Z` stamps `X.Y.Z`. A month tag,
-`vX.Y.Z-vpicYYYY_MM`, stamps `X.Y.Z+vpic.YYYY.MM`. There is no version-bump commit. A build
-that skips the stamp reports `0.0.0`. `vpic-release.yaml` stamps only the wheel
+`.github/stamp-version.sh <tag>` writes a tag's version into `Cargo.toml` and
+`Cargo.lock` before a build, so the wheel, the sdist, and `ultravin.__version__`
+all carry it. Tag `vX.Y.Z` stamps `X.Y.Z`. A month tag, `vX.Y.Z-vpicYYYY_MM`,
+stamps `X.Y.Z+vpic.YYYY.MM`. There is no version-bump commit. A build that
+skips the stamp reports `0.0.0`. `vpic-release.yaml` stamps only the wheel
 builds: the importer records the crate version in the artifact, so the data
 artifact is always built at `0.0.0`.
 
@@ -29,8 +29,8 @@ The `build-data` action (`.github/actions/build-data`) rebuilds it in CI. It
 downloads the pinned dump, checks the `sha256`, runs `vpic-import`, and asserts
 that the emitted artifact's `blake3` matches the manifest. Given a `dump` input,
 it checks that file's `sha256` even on a cache hit, and builds from it instead
-of downloading the dump. The sdist embeds the
-artifact too (`[tool.maturin] include`), so a source install works offline.
+of downloading the dump. The sdist embeds the artifact too
+(`[tool.maturin] include`), so a source install works offline.
 
 The Rust crate's default `download-data` feature fetches
 `releases/download/v<crate version>/vpic.rkyv` on a crate user's first build.
@@ -42,8 +42,8 @@ described in `crates/ultravin/README.md`.
 
 The wheel is abi3 (`pyo3/abi3-py310`): one wheel per platform serves Python
 3.10+. A release carries three: linux x86_64 (`manylinux_2_17`), linux aarch64
-(`manylinux_2_28`) and macOS arm64. The crate is pure Rust (blake3 uses its `pure` feature), so every cross
-target builds with the default cross-gcc.
+(`manylinux_2_28`) and macOS arm64. The crate is pure Rust (blake3 uses its
+`pure` feature), so every cross target builds with the default cross-gcc.
 
 A bare install of the wheel brings no dependency. The `ultravin` command needs
 the `cli` extra, which adds `typer`.
