@@ -56,7 +56,9 @@ It runs three workflows:
    VINs the wheel generates from its own data, with the wheel and with NHTSA's
    unmodified `spvindecode`, and fails on any difference.
 4. If the comparison passes, the workflow pushes `data/vpic-<YYYY_MM>` and opens
-   a pull request into `master`. A person reviews and merges it.
+   a pull request into `master`. A person reviews and merges it. If the
+   organization doesn't allow GitHub Actions to create pull requests, the run
+   fails once with a link to the branch, and a person opens the pull request.
 5. The next run on `master` builds the month that the manifest now pins, runs
    the same comparison, and publishes the release. A run publishes only from
    `master`, only after the comparison passes, and only when no release of that

@@ -121,16 +121,21 @@ jobs:
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             released=true
           fi
-          open_pr=0
+          # A new month already handed over: its branch was pushed, whether or not
+          # the pull request opened (the pull-request job can push but may not be
+          # allowed to open one, and then a person opens it from the branch).
+          handed_over=false
           if [ "$new" = true ]; then
             open_pr=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "data/vpic-$month" --state open --json number --jq length)
+            branch=$(gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/heads/data/vpic-$month" --jq length)
+            if [ "$open_pr" != 0 ] || [ "$branch" != 0 ]; then handed_over=true; fi
           fi
 
           build=true
           if [ "$EVENT" = schedule ]; then
             # A daily run builds only when there is something to do: a new month
-            # with no pull request yet, or a pinned month with no release yet.
-            if [ "$new" = true ] && [ "$open_pr" != 0 ]; then build=false; fi
+            # not yet handed over, or a pinned month with no release yet.
+            if [ "$new" = true ] && [ "$handed_over" = true ]; then build=false; fi
             if [ "$new" = false ] && [ "$released" = true ]; then build=false; fi
           fi
           publish=false
@@ -154,7 +159,7 @@ jobs:
             echo "| pinned month | \`$pinned\` |"
             echo "| new data | $new |"
             echo "| tag | \`$tag\` (released: $released) |"
-            echo "| open data pull request | $open_pr |"
+            echo "| data branch or pull request exists | $handed_over |"
             echo "| builds | $build |"
             echo "| publishes | $publish |"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -455,7 +460,17 @@ jobs:
           } > "$RUNNER_TEMP/body.md"
           if ! gh pr create --repo "$GITHUB_REPOSITORY" --base master --head "$BRANCH" \
               --title "data: NHTSA vPIC $MONTH" --body-file "$RUNNER_TEMP/body.md"; then
-            echo "::error::could not open the pull request. Open it by hand: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/compare/master...$BRANCH (GitHub Actions may need permission to create pull requests: Settings > Actions > General)"
+            # The branch is pushed, so later scheduled runs skip this month; this
+            # run fails once, as the signal for a person to open the pull request.
+            url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/compare/master...$BRANCH"
+            echo "::error::$BRANCH is pushed, but the pull request did not open. Open it by hand: $url (to let this job open it, an organization owner allows GitHub Actions to create pull requests under Actions > General > Workflow permissions)"
+            {
+              echo "### Open the data pull request by hand"
+              echo
+              echo "$url"
+              echo
+              cat "$RUNNER_TEMP/body.md"
+            } >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
           gh workflow run ci.yaml --repo "$GITHUB_REPOSITORY" --ref "$BRANCH"
