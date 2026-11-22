@@ -64,19 +64,24 @@ dump_sql() {
 }
 PSQL_LOAD=(psql -q -v ON_ERROR_STOP=1 -U postgres -d vpic)
 
+# `docker compose up --wait` returns once the healthcheck's pg_isready passes, and
+# it already passes while the image's first-start init runs on a socket-only
+# server that has not created `vpic` yet. A load straight after `up` can then fail
+# on a missing database. The init server never listens on TCP, so a query over
+# TCP succeeds only on the real server. Waits up to 60 s for service $1.
+wait_ready() {
+  for _ in $(seq 60); do
+    docker compose exec -T "$1" psql -h 127.0.0.1 -U postgres -d vpic -tAc 'select 1' >/dev/null 2>&1 && return 0
+    sleep 1
+  done
+  docker compose exec -T "$1" psql -h 127.0.0.1 -U postgres -d vpic -tAc 'select 1' >/dev/null
+}
+
 cmd="${1:-}"; shift || true
 case "$cmd" in
   up)
     docker compose up -d --wait "$SVC"
-    # The healthcheck's pg_isready already passes while the image's first-start
-    # init runs on a socket-only server that has not created `vpic` yet, so a
-    # load straight after `up` can fail on a missing database. The init server
-    # never listens on TCP: a query over TCP succeeds only on the real server.
-    for _ in $(seq 60); do
-      docker compose exec -T "$SVC" psql -h 127.0.0.1 -U postgres -d vpic -tAc 'select 1' >/dev/null 2>&1 && break
-      sleep 1
-    done
-    docker compose exec -T "$SVC" psql -h 127.0.0.1 -U postgres -d vpic -tAc 'select 1' >/dev/null
+    wait_ready "$SVC"
     # Ask compose for the binding rather than hardcoding it: $SVC selects any pool
     # member and they are on 55432-55436 (see docker-compose.yml).
     echo "$SVC ready on $(docker compose port "$SVC" 5432) (db=vpic, user=postgres)"
@@ -108,6 +113,9 @@ case "$cmd" in
     ;;
   pool-up)
     docker compose up -d --wait $POOL
+    for svc in $POOL; do
+      wait_ready "$svc"
+    done
     echo "oracle pool ready on localhost:55432-55436 (db=vpic, user=postgres)"
     ;;
   pool-load)
