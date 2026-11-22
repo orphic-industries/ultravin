@@ -26,7 +26,7 @@ on:
     branches:
       - master
   schedule:
-    # Weekly Monday 09:17 UTC — far from nightly (08:41) and data-refresh (20:23)
+    # Weekly Monday 09:17 UTC
     - cron: "17 9 * * 1"
   workflow_dispatch:
 
@@ -184,7 +184,7 @@ jobs:
           # Audit uv.lock (incl. dev deps), not an env: auditing the project env
           # under `uv run --with pip-audit` also audited pip-audit's own deps
           # (a stale certifi went red) and looked up the unpublished project on
-          # PyPI. Hashed pins + --disable-pip skip pip-audit's venv resolver.
+          # the package index. Hashed pins + --disable-pip skip pip-audit's venv resolver.
           uv export --frozen --all-extras --no-emit-project --format requirements-txt -o requirements-audit.txt
           uvx pip-audit -r requirements-audit.txt --disable-pip --progress-spinner off
 
@@ -349,7 +349,7 @@ jobs:
           enable-cache: false
       # A real gate: zizmor exits non-zero on findings, so no second pass is
       # needed. Deliberate exceptions live in .github/zizmor.yml. Scan all of
-      # .github/ rather than just workflows+actions so dependabot.yml is covered.
+      # .github/ rather than just workflows+actions so every config there is covered.
       - name: Audit workflows
         shell: bash
         run: |
@@ -413,9 +413,9 @@ jobs:
     # (a same-VM process reads a later step's env, and an installed package owns
     # the scanned interpreter's startup via .pth), and job-level `if` cannot
     # read secrets, so the REF is the gate: push/schedule/dispatch on master,
-    # never a pull_request merge ref or a dispatch on a bot branch — nightly.yaml
-    # auto-approves the gated runs on those. Fork PRs carry no secrets either
-    # way. PRs keep pip-audit/osv/cargo-audit/trivy; snyk lands post-merge.
+    # never a pull_request merge ref or a dispatch on another branch. Fork PRs
+    # carry no secrets either way. PRs keep pip-audit/osv/cargo-audit/trivy;
+    # snyk lands post-merge.
     #
     # Free plan works; the steps still no-op when SNYK_TOKEN is unset. With the
     # token present it's a hard gate like every other scanner: snyk exits 1 on
@@ -462,7 +462,7 @@ jobs:
       # it does read. --frozen is load-bearing: an unfrozen export re-resolves
       # and drops uv.lock's exclude-newer cooldown pin, silently changing what
       # gets scanned. --no-emit-project drops the `-e .` self-reference, which
-      # snyk cannot resolve from PyPI. The Rust closure is covered by
+      # snyk cannot resolve from the package index. The Rust closure is covered by
       # cargo-audit, cargo-deny, osv, and trivy; what snyk adds here is its
       # proprietary DB, which occasionally flags what OSV misses.
       - name: Export the locked Python closure for snyk
@@ -503,7 +503,7 @@ jobs:
       # Neither seed may be a bare name. `uv pip install` never reads uv.lock, so
       # uv.lock's exclude-newer cooldown — provenance kept in its [options] table
       # — does not cover this step, and `pip setuptools` resolved live against
-      # PyPI on every run (setuptools 84.0.0, released after the cooldown cutoff,
+      # the package index on every run (setuptools 84.0.0, released after the cooldown cutoff,
       # was landing here). --seed takes pip from uv's own vendored wheel with no
       # index resolution at all, and setuptools is pinned to the newest release
       # at or before the cutoff. Bump the pin when the cooldown advances past a

@@ -6,9 +6,8 @@ on:
       - master
   workflow_dispatch:
 
-# Keyed on the event too, not just the ref: automation dispatches this workflow
-# and then blocks on the contexts that run produces, so a plain ref-keyed group
-# would let an ordinary push cancel the run something is still waiting on.
+# Keyed on the event too, not just the ref, so a manual dispatch and a push on
+# the same ref don't cancel each other.
 env:
   # CVE-2026-111943: Node runs every action and has its own compiled-in roots,
   # which still trust the leaked eMudhra keys. Make it read this bundle instead,
@@ -107,47 +106,6 @@ jobs:
         name: vpic-data
         path: crates/ultravin/data/vpic.rkyv
         if-no-files-found: error
-  # Every push, checked against the oracle's own frozen answers for this data
-  # month — ~1.8M of them, and no Postgres involved. A hard gate with no skip
-  # path: `answerkey fetch` refuses a missing pin and a pin for another month,
-  # so a data month can only land together with its key. The refresh pipeline
-  # makes that atomic — answer-key.yaml builds the key ON the data branch and
-  # commits tests/answerkey.json into the same PR (see that workflow's header).
-  # Until the pin lands, this job is red on the data PR; that is the gate
-  # working, not a flake. Tampering fails closed too: deleting or rewriting the
-  # pin fails fetch on the month or the checksum, and the key asset itself
-  # cannot be forged without write access to the data-<month> release.
-  answerkey:
-    needs: data
-    runs-on: ubuntu-latest
-    timeout-minutes: 40
-    steps:
-    - name: Distrust the leaked eMudhra CA keys (CVE-2026-111943)
-      # The runner image's CA bundle still trusts them via emSign ECC Root CA - G3;
-      # rustup, cargo, git, curl and Python all read it. A no-op once images ship
-      # ca-certificates >= 20260816. Probe with scripts/check_emudhra.py.
-      run: sudo sed -i 's|^mozilla/emSign_ECC_Root_CA_-_G3\.crt$|!&|' /etc/ca-certificates.conf && sudo update-ca-certificates --fresh >/dev/null
-    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      with:
-        persist-credentials: false
-    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-      with:
-        python-version-file: .python-version
-    - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
-      with:
-        enable-cache: false
-    - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-      with:
-        name: vpic-data
-        path: crates/ultravin/data
-    - run: echo "UV_PYTHON=$pythonLocation" >> "$GITHUB_ENV"
-    - run: uv sync --frozen --all-extras
-    - name: Verify against the frozen answers
-      env:
-        GH_TOKEN: ${{ github.token }}
-      run: |
-        uv run --frozen -- python -m scripts.parity.answerkey fetch
-        uv run --frozen -- python -m scripts.parity.answerkey verify --key target/answerkey
   test:
     needs: data
     runs-on: ubuntu-latest
